@@ -298,11 +298,11 @@ export default function Home() {
       const payload: any[] = rowsToInsert
         .filter((r) => !!r.job_date && !!r.job_type && !!r.technician_id)
         .map((r) => ({
-          technician_id: Number(r.technician_id!),,
+          technician_id: Number(r.technician_id!),
           
           job_type: r.job_type as JobType,
           date: r.job_date!,
-          points: pointsFor({ job_type: r.job_type as JobType }), complaint_flag: false,,
+          points: pointsFor({ job_type: r.job_type as JobType }), complaint_flag: false,
         }));
       if (!payload.length) throw new Error("Add at least one complete row");
 
