@@ -270,7 +270,7 @@ export default function Home() {
 
         const [techs, jobData] = await Promise.all([
           supabaseRestGet<Technician[]>("technicians", "select=*&order=name.asc"),
-          supabaseRestGet<Job[]>("jobs", "select=*&order=job_date.desc"),
+          supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points&order=date.desc"),
         ]);
         if (cancelled) return;
         setTechnicians(techs);
@@ -295,19 +295,19 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const payload: Job[] = rowsToInsert
+      const payload: any[] = rowsToInsert
         .filter((r) => !!r.job_date && !!r.job_type && !!r.technician_id)
         .map((r) => ({
-          technician_id: r.technician_id!,
-          technician_name: techniciansById[r.technician_id!]?.name,
+          technician_id: Number(r.technician_id!),
+          
           job_type: r.job_type as JobType,
-          job_date: r.job_date!,
-          notes: r.notes,
+          date: r.job_date!,
+          points: pointsFor({ job_type: r.job_type as JobType }), complaint_flag: false,
         }));
       if (!payload.length) throw new Error("Add at least one complete row");
 
       await supabaseRestInsert("jobs", payload);
-      const jobData = await supabaseRestGet<Job[]>("jobs", "select=*&order=job_date.desc");
+      const jobData = await supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points&order=date.desc");
       setJobs(jobData);
       setRowsToInsert([{ job_date: isoDateOnly(new Date()), job_type: "WIFI_INSTALL" }]);
       setView("Dashboard");
