@@ -10,12 +10,15 @@ function assertEnv() {
 
 async function pgGet(path: string, query: URLSearchParams) {
   assertEnv();
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}?${query.toString()}`, {
-    headers: {
-      apikey: SERVICE_KEY,
-      Authorization: `Bearer ${SERVICE_KEY}`,
-    },
-  });
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/${path}?${query.toString()}`,
+    {
+      headers: {
+        apikey: SERVICE_KEY,
+        Authorization: `Bearer ${SERVICE_KEY}`,
+      },
+    }
+  );
   if (!res.ok) throw new Error(`PostgREST GET ${path} failed: ${res.status}`);
   return res.json();
 }
@@ -38,17 +41,15 @@ function toCsv(rows: any[]) {
   ];
   const lines = [headers.join(",")];
   for (const r of rows) {
-    lines.push(
-      [
-        escapeCsv(r.date),
-        escapeCsv(r.technician),
-        escapeCsv(r.job_type),
-        escapeCsv(r.points),
-        escapeCsv(r.complaint_flag),
-        escapeCsv(r.quality_deduction),
-        escapeCsv(r.net_points),
-      ].join(",")
-    );
+    lines.push([
+      escapeCsv(r.date),
+      escapeCsv(r.technician),
+      escapeCsv(r.job_type),
+      escapeCsv(r.points),
+      escapeCsv(r.complaint_flag),
+      escapeCsv(r.quality_deduction),
+      escapeCsv(r.net_points),
+    ].join(","));
   }
   return lines.join("\n");
 }
@@ -65,21 +66,25 @@ export async function GET(req: Request) {
   const from = url.searchParams.get("from");
   const to = url.searchParams.get("to");
 
-  const technicians = await pgGet("technicians", new URLSearchParams([ ["select", "id,name" ] ]));
+  const technicians = await pgGet(
+    "technicians",
+    new URLSearchParams([["select", "id,name"]])
+  );
   const techLookup = new Map<number, string>();
   for (const t of technicians as any[]) techLookup.set(t.id, t.name);
 
   const jobsQuery = new URLSearchParams();
-  jobsQuery.set("select", "id,technician_id,job_date:date,job_type,points,complaint_flag,quality_deduction");
+  jobsQuery.set(
+    "select",
+    "id,technician_id,job_date:date,job_type,points,complaint_flag,quality_deduction"
+  );
   jobsQuery.set("order", "date.desc");
   jobsQuery.set("limit", "5000");
-
-  if (technicianId) jobsQuery.set("technician_id", `eq.${technicianId}`);
-  if (from) jobsQuery.append("job_date", `gte.${from}");
-  if (to) jobsQuery.append("job_date", `lte.${to}");
+  if (technicianId) jobsQuery.set("technician_id", "eq." + technicianId);
+  if (from) jobsQuery.append("job_date", "gte." + from);
+  if (to) jobsQuery.append("job_date", "lte." + to);
 
   const jobs = await pgGet("jobs", jobsQuery);
-
   const csvRows = (jobs as any[]).map((j) => ({
     date: j.job_date,
     technician: techLookup.get(j.technician_id) ?? j.technician_id,
