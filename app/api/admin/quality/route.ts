@@ -31,132 +31,132 @@ function authHeaders(): Record<string, string> {
 async function pgFetch(path: string, init: RequestInit) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, init);
   if (!res.ok) {
-    const msg = await res.text();
-    throw new Error(`${init.method ?? "GET"} ${path} failed: ${res.status} ${msg}`);
+    throw new Error(`PostgREST error: ${res.status}`);
   }
-  return res;
+
+  // Some operations return 204 No Content
+  if (res.status === 204) {
+    return null;
+  }
+
+  const text = await res.text();
+  if (!text) return null;
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return JSON.parse(text);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text as any;
+  }
 }
 
-async function pgGet<T>(path: string): Promise<T> {
-  const res = await pgFetch(path, { method: "GET", headers: authHeaders() });
-  return res.json();
+function pgGet<T>(path: string) {
+  return pgFetch(path, { method: "GET", headers: authHeaders() }) as Promise<T>;
 }
 
-async function pgInsert(path: string, payload: object | object[]) {
-  await pgFetch(path, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
-  });
+function pgPatch(path: string, body: Record<string, any>) {
+  return pgFetch(path, { method: "PATCH", headers: authHeaders(), body: JSON.stringify(body) });
 }
 
-async function pgPatch(path: string, payload: object) {
-  await pgFetch(path, {
-    method: "PATCH",
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
-  });
+function pgInsert(path: string, body: any) {
+  return pgFetch(path, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
 }
 
-function toDay(date: string) {
-  return new Date(date).toISOString().slice(0, 10);
+function toDay(raw: any) {
+  // safe conversion for date-only column
+  return new Date(raw).toISOString().slice(0, 10);
 }
 
 export async function POST(req: Request) {
-  let body: Body;
-  try {
-    body = (await req.json()) as Body;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
+  const body = (await req.json().catch(() => ({}))) as Body;
 
-  if (!ADMIN_TOKEN || body.token !== ADMIN_TOKEN) {
+  if (!body.token || body.token !== ADMIN_TOKEN) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    if (body.action === "complaint") {
-      await pgPatch(`jobs?id=eq.${body.job_id}`, { complaint_flag: body.complaint });
-      return NextResponse.json({ ok: true });
-    }
+  if (body.action === "complaint") {
+    await pgPatch(`jobs?id=eq.${body.job_id}`, { complaint_flag: body.complaint });
+    return NextResponse.json({ ok: true });
+  }
 
-    if (body.action === "deduction") {
-      const deduction = Math.max(0, Math.round(body.deduction));
-      await pgPatch(`jobs?id=eq.${body.job_id}`, { quality_deduction: deduction });
-      return NextResponse.json({ ok: true });
-    }
+  if (body.action === "deduction") {
+    await pgPatch(`jobs?id=eq.${body.job_id}`, { quality_deduction: body.deduction });
+    return NextResponse.json({ ok: true });
+  }
 
-    // run_import (also normalizes existing job_type strings)
-    const imports = await pgGet<any[]>(
-      'job_import?migrated_at=is.null&select=id,"Status","Date","Assigned user","Client","Title"'
-    );
-    if (!imports.length) return NextResponse.json({ inserted_count: 0 });
+  if (body.action === "run_import") {
+    // Full reset to avoid duplicates
+    await pgFetch("jobs", { method: "DELETE", headers: authHeaders() });
+    await pgPatch("job_import?migrated_at=not.is.null", { migrated_at: null });
 
-    const jobTypes = await pgGet<any[]>("job_types?select=id,job_name,point_value");
-    const technicians = await pgGet<any[]>("technicians?select=id,name");
-    const quarters = await pgGet<any[]>("quarters?select=id,start_date,end_date");
-
-    const jobTypeByStatus = new Map<number, any>();
+    const jobTypes = (await pgGet<Array<{ id: number; job_name: string; point_value?: number }>>("job_types")) ?? [];
+    const jobTypeById = new Map<number, { job_name: string; point_value?: number }>();
     const pointsByNormalized = new Map<string, number>();
 
     for (const jt of jobTypes) {
-      jobTypeByStatus.set(Number(jt.id), jt);
-      const normalized = normalizeJobType(jt.job_name);
-      pointsByNormalized.set(normalized, Number(jt.point_value ?? 0));
+      jobTypeById.set(jt.id, { job_name: jt.job_name, point_value: jt.point_value });
+      pointsByNormalized.set(normalizeJobType(jt.job_name), jt.point_value ?? 0);
     }
 
-    const technicianByName = new Map<string, any>();
-    for (const t of technicians) {
-      technicianByName.set(String(t.name).trim(), t);
-    }
+    const technicians = (await pgGet<Array<{ id: number; name: string }>>("technicians")) ?? [];
+    const techIdByName = new Map<string, number>();
+    for (const t of technicians) techIdByName.set(String(t.name ?? "").trim(), t.id);
 
-    const prepared: any[] = [];
-    for (const row of imports) {
-      const jt = jobTypeByStatus.get(Number(row.Status));
-      const tech = technicianByName.get(String(row["Assigned user"]).trim());
-      const jobDate = new Date(row.Date);
+    const quarters =
+      (await pgGet<Array<{ id: number; start_date: string; end_date: string }>>("quarters")) ?? [];
 
-      const q = quarters.find((x: any) => {
-        const start = new Date(x.start_date);
-        const end = new Date(x.end_date);
-        return jobDate >= start && jobDate <= end;
-      });
+    const rows =
+      (await pgGet<Array<{ Status: number; Date: string; "Assigned user": string; Client: string; Title: string }>>(
+        'job_import?migrated_at=is.null&select=Status,Date,"Assigned user",Client,Title'
+      )) ?? [];
 
-      if (!jt || !tech || !q) continue;
+    const prepared: Array<{ technician_id: number; quarter_id: number; date: string; job_type: string; points: number; complaint_flag: boolean; quality_deduction: number }> = [];
 
-      const normalizedJobType = normalizeJobType(jt.job_name);
-      const points = pointsByNormalized.get(normalizedJobType) ?? Number(jt.point_value ?? 0);
+    for (const row of rows) {
+      const jt = jobTypeById.get(row.Status);
+      const jobTypeName = jt?.job_name ?? "";
+      const jobTypeCode = normalizeJobType(jobTypeName);
+      const points = pointsByNormalized.get(jobTypeCode) ?? 0;
+      const technician = techIdByName.get(String(row["Assigned user"] ?? "").trim());
+
+      const d = new Date(row.Date);
+      const dateIso = toDay(d);
+
+      let quarterId: number | undefined;
+      for (const q of quarters) {
+        const start = new Date(q.start_date);
+        const end = new Date(q.end_date);
+        if (d >= start && d <= end) {
+          quarterId = q.id;
+          break;
+        }
+      }
+
+      if (!technician || !quarterId) continue;
 
       prepared.push({
-        technician_id: tech.id,
-        quarter_id: q.id,
-        date: toDay(row.Date),
-        job_type: normalizedJobType,
+        technician_id: technician,
+        quarter_id: quarterId,
+        date: dateIso,
+        job_type: jobTypeCode,
         points,
         complaint_flag: false,
         quality_deduction: 0,
       });
     }
 
-    if (!prepared.length) return NextResponse.json({ inserted_count: 0 });
-
-    await pgInsert("jobs", prepared);
-
-    // normalize existing jobs already inserted in the past
-    for (const jt of jobTypes) {
-      const label = String(jt.job_name ?? "");
-      const normalized = normalizeJobType(label);
-      if (!label || label === normalized) continue;
-      const points = pointsByNormalized.get(normalized) ?? Number(jt.point_value ?? 0);
-      await pgPatch(`jobs?job_type=eq.${encodeURIComponent(label)}`, { job_type: normalized, points });
+    if (prepared.length) {
+      await pgInsert("jobs", prepared);
     }
 
-    // mark imports migrated
-    const ids = imports.map((r) => r.id).join(",");
-    await pgPatch(`job_import?id=in.(${ids})`, { migrated_at: new Date().toISOString() });
+    await pgPatch("job_import?migrated_at=is.null", { migrated_at: new Date().toISOString() });
 
-    return NextResponse.json({ inserted_count: prepared.length });
-  } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message ?? e) }, { status: 500 });
+    return NextResponse.json({ ok: true, inserted_count: prepared.length });
   }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
