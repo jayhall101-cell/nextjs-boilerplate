@@ -13,17 +13,19 @@ function normalizeJobType(value: string) {
 
 async function pgFetch(path: string, init: RequestInit) {
   if (!SUPABASE_URL || !SERVICE_KEY) throw new Error("Missing env vars");
+
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: {
-      ...(init?.headers ?? {}),
+      ...((init?.headers ?? {}) as Record<string, string>),
       apikey: SERVICE_KEY,
       Authorization: `Bearer ${SERVICE_KEY}`,
-      ...(init?.method?.toUpperCase() === "POST" || init?.method?.toUpperCase() === "PATCH"
+      ...((init?.method?.toUpperCase() === "POST" || init?.method?.toUpperCase() === "PATCH")
         ? { "Content-Type": "application/json" }
         : {}),
     },
   });
+
   if (!res.ok) throw new Error(`PostgREST ${path} failed: ${res.status}`);
   return res;
 }
@@ -34,12 +36,20 @@ async function pgGet<T>(path: string) {
 }
 
 async function pgPatch(path: string, body: any) {
-  const res = await pgFetch(path, { method: "PATCH", body: JSON.stringify(body), headers: { Prefer: "return=representation" } });
+  const res = await pgFetch(path, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    headers: { Prefer: "return=representation" },
+  });
   return res.json();
 }
 
 async function pgInsert(path: string, body: any) {
-  const res = await pgFetch(path, { method: "POST", body: JSON.stringify(body), headers: { Prefer: "return=representation" } });
+  const res = await pgFetch(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { Prefer: "return=representation" },
+  });
   return res.json();
 }
 
@@ -55,6 +65,7 @@ type Body =
 
 export async function POST(req: Request) {
   const body = (await req.json()) as Body;
+
   if (!ADMIN_TOKEN || body.token !== ADMIN_TOKEN) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -70,68 +81,67 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  // run_import (also normalizes existing job_type strings)
+  // run_import: reset to match CSV staging, then import once
+  await pgFetch("jobs", { method: "DELETE" });
+  await pgPatch("job_import?migrated_at=not.is.null", { migrated_at: null });
+
   const imports = await pgGet<any[]>(
     'job_import?migrated_at=is.null&select=Status,Date,"Assigned user",Client,Title'
   );
 
-  if (!imports.length) return NextResponse.json({ inserted_count: 0 });
+  const jobTypes = await pgGet<{ id: number; job_name: string; point_value: number }[]>(
+    "job_types?select=id,job_name,point_value"
+  );
 
-  const jobTypes = await pgGet<any[]>('job_types?select=id,job_name,point_value');
-  const technicians = await pgGet<any[]>('technicians?select=id,name');
-  const quarters = await pgGet<any[]>('quarters?select=id,start_date,end_date');
+  const technicians = await pgGet<{ id: number; name: string }[]>(
+    "technicians?select=id,name"
+  );
 
-  const jobTypeByStatus = new Map<number, any>();
-  const pointsByNormalized = new Map<string, number>();
+  const quarters = await pgGet<{ id: number; start_date: string; end_date: string }[]>(
+    "quarters?select=id,start_date,end_date"
+  );
+
+  const jobTypeById = new Map<number, { name: string; points: number }>();
+  const pointsByCode = new Map<string, number>();
   for (const jt of jobTypes) {
-    jobTypeByStatus.set(Number(jt.id), jt);
-    pointsByNormalized.set(normalizeJobType(jt.job_name), Number(jt.point_value ?? 0));
+    const code = normalizeJobType(jt.job_name);
+    jobTypeById.set(jt.id, { name: jt.job_name, points: jt.point_value });
+    pointsByCode.set(code, jt.point_value);
   }
 
-  const technicianByName = new Map<string, any>();
-  for (const t of technicians) {
-    technicianByName.set(String(t.name).trim(), t);
-  }
+  const techIdByName = new Map<string, number>();
+  for (const t of technicians) techIdByName.set((t.name ?? "").trim(), t.id);
 
   const prepared: any[] = [];
-  for (const row of imports) {
-    const jt = jobTypeByStatus.get(Number(row.Status));
-    const tech = technicianByName.get(String(row["Assigned user"]).trim());
-    const jobDate = new Date(row.Date);
-    const q = quarters.find((x: any) => {
-      const start = new Date(x.start_date);
-      const end = new Date(x.end_date);
-      return jobDate >= start && jobDate <= end;
-    });
-    if (!jt || !tech || !q) continue;
 
-    const normalizedJobType = normalizeJobType(jt.job_name);
-    const points = pointsByNormalized.get(normalizedJobType) ?? Number(jt.point_value ?? 0);
+  for (const row of imports) {
+    const techId = techIdByName.get(String(row["Assigned user"] ?? "").trim());
+    const jt = jobTypeById.get(Number(row.Status));
+
+    if (!techId || !jt) continue;
+
+    const rowDate = String(row.Date ?? "");
+    const q = quarters.find(
+      (qq) => rowDate >= String(qq.start_date) && rowDate <= String(qq.end_date)
+    );
+    if (!q) continue;
+
+    const jobCode = normalizeJobType(jt.name);
+    const points = pointsByCode.get(jobCode) ?? jt.points;
 
     prepared.push({
-      technician_id: tech.id,
+      technician_id: techId,
       quarter_id: q.id,
-      date: toDay(row.Date),
-      job_type: normalizedJobType,
+      date: toDay(rowDate),
+      job_type: jobCode,
       points,
       complaint_flag: false,
       quality_deduction: 0,
     });
   }
 
-  if (!prepared.length) return NextResponse.json({ inserted_count: 0 });
+  if (prepared.length) await pgInsert("jobs", prepared);
+  await pgPatch("job_import?migrated_at=is.null", { migrated_at: new Date().toISOString() });
 
-  await pgInsert('jobs', prepared);
-
-  for (const jt of jobTypes) {
-    const label = String(jt.job_name ?? "");
-    const normalized = normalizeJobType(label);
-    if (!label || label === normalized) continue;
-    const points = pointsByNormalized.get(normalized) ?? Number(jt.point_value ?? 0);
-    await pgPatch(`jobs?job_type=eq.${encodeURIComponent(label)}`, { job_type: normalized, points });
-  }
-
-  await pgPatch('job_import?migrated_at=is.null', { migrated_at: new Date().toISOString() });
-
-  return NextResponse.json({ inserted_count: prepared.length });
+  return NextResponse.json({ ok: true });
 }
