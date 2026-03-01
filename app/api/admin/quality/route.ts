@@ -66,7 +66,7 @@ type Body =
 export async function POST(req: Request) {
   const body = (await req.json()) as Body;
 
-  if (!ADMIN_TOKEN || body.token !== ADMIN_TOKEN) {
+  if (!body.token || body.token !== ADMIN_TOKEN) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
