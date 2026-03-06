@@ -564,8 +564,13 @@ export default function Home() {
     <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-black dark:text-zinc-50">
       <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-4">
-          <div>
-            <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">NETFLAIR · Production</div>
+          <div className="flex items-center gap-3">
+            <img
+              src="/logo.png"
+              alt="Astute Technology Solution"
+              className="h-9 w-auto object-contain"
+              style={{ filter: "drop-shadow(0 0 8px rgba(255,120,0,0.25))" }}
+            />
             <div className="text-xs text-zinc-500 dark:text-zinc-400">Proformans / points tracking</div>
           </div>
           <nav className="flex flex-wrap gap-2">
