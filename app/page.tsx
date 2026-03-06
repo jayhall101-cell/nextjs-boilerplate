@@ -77,6 +77,8 @@ function endOfMonth(date: Date) {
   return d;
 }
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 async function supabaseRestGet<T>(table: string, query: string) {
   const base = normalizeUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -151,6 +153,9 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
     WIFI_SUPPORT: 0,
   };
 
+  // Monthly breakdown: key = "YYYY-MM"
+  const byMonth: Record<string, { jobs: number; points: number; year: number; month: number }> = {};
+
   for (const job of jobs) {
     const d = new Date(job.job_date);
     const pts = pointsFor(job);
@@ -178,6 +183,14 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
       totalMonth += pts;
       jobCountsByTypeMonth[job.job_type] += 1;
     }
+
+    // Monthly rollup
+    const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (!byMonth[monthKey]) {
+      byMonth[monthKey] = { jobs: 0, points: 0, year: d.getFullYear(), month: d.getMonth() };
+    }
+    byMonth[monthKey].jobs += 1;
+    byMonth[monthKey].points += pts;
   }
 
   const leaderboardWeek = Object.entries(byTech)
@@ -187,6 +200,15 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
   const leaderboardMonth = Object.entries(byTech)
     .map(([id, stats]) => ({ id, name: techniciansById[id]?.name ?? id, ...stats }))
     .sort((a, b) => b.month - a.month);
+
+  const monthlyBreakdown = Object.entries(byMonth)
+    .sort((a, b) => b[0].localeCompare(a[0])) // most recent first
+    .map(([key, val]) => ({
+      key,
+      label: `${MONTH_NAMES[val.month]} ${val.year}`,
+      jobs: val.jobs,
+      points: val.points,
+    }));
 
   return {
     weekStart: isoDateOnly(weekStart),
@@ -198,6 +220,7 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
     jobCountsByTypeMonth,
     leaderboardWeek,
     leaderboardMonth,
+    monthlyBreakdown,
   };
 }
 
@@ -299,10 +322,10 @@ export default function Home() {
         .filter((r) => !!r.job_date && !!r.job_type && !!r.technician_id)
         .map((r) => ({
           technician_id: Number(r.technician_id!),
-          
           job_type: r.job_type as JobType,
           date: r.job_date!,
-          points: pointsFor({ job_type: r.job_type as JobType }), complaint_flag: false,
+          points: pointsFor({ job_type: r.job_type as JobType }),
+          complaint_flag: false,
         }));
       if (!payload.length) throw new Error("Add at least one complete row");
 
@@ -351,6 +374,15 @@ export default function Home() {
             <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">Leaderboard (Week)</h2>
             <Table columns={['Tech', 'Points', 'Jobs']} rows={aggregates.leaderboardWeek.map((x) => [x.name, x.week, x.jobsWeek])} />
           </div>
+        </div>
+
+        {/* Monthly breakdown table */}
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">Monthly breakdown</h2>
+          <Table
+            columns={['Month', 'Total jobs', 'Total points']}
+            rows={aggregates.monthlyBreakdown.map((m) => [m.label, m.jobs, number(m.points)])}
+          />
         </div>
       </div>
     );
