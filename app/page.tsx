@@ -153,8 +153,8 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
     WIFI_SUPPORT: 0,
   };
 
-  // Monthly breakdown: key = "YYYY-MM"
-  const byMonth: Record<string, { jobs: number; points: number; year: number; month: number }> = {};
+  // Monthly breakdown per technician: byMonth[monthKey][techId]
+  const byMonth: Record<string, { year: number; month: number; techs: Record<string, { jobs: number; points: number }> }> = {};
 
   for (const job of jobs) {
     const d = new Date(job.job_date);
@@ -184,13 +184,16 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
       jobCountsByTypeMonth[job.job_type] += 1;
     }
 
-    // Monthly rollup
+    // Monthly per-tech rollup
     const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     if (!byMonth[monthKey]) {
-      byMonth[monthKey] = { jobs: 0, points: 0, year: d.getFullYear(), month: d.getMonth() };
+      byMonth[monthKey] = { year: d.getFullYear(), month: d.getMonth(), techs: {} };
     }
-    byMonth[monthKey].jobs += 1;
-    byMonth[monthKey].points += pts;
+    if (!byMonth[monthKey].techs[tech]) {
+      byMonth[monthKey].techs[tech] = { jobs: 0, points: 0 };
+    }
+    byMonth[monthKey].techs[tech].jobs += 1;
+    byMonth[monthKey].techs[tech].points += pts;
   }
 
   const leaderboardWeek = Object.entries(byTech)
@@ -206,8 +209,9 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
     .map(([key, val]) => ({
       key,
       label: `${MONTH_NAMES[val.month]} ${val.year}`,
-      jobs: val.jobs,
-      points: val.points,
+      techs: val.techs,
+      totalJobs: Object.values(val.techs).reduce((s, t) => s + t.jobs, 0),
+      totalPoints: Object.values(val.techs).reduce((s, t) => s + t.points, 0),
     }));
 
   return {
@@ -284,13 +288,6 @@ export default function Home() {
       try {
         setLoading(true);
         setError(null);
-        const base = normalizeUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
-        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-        if (!base || !key) {
-          setError("Set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY.");
-          return;
-        }
-
         const [techs, jobData] = await Promise.all([
           supabaseRestGet<Technician[]>("technicians", "select=*&order=name.asc"),
           supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points&order=date.desc"),
@@ -376,13 +373,21 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Monthly breakdown table */}
-        <div>
-          <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">Monthly breakdown</h2>
-          <Table
-            columns={['Month', 'Total jobs', 'Total points']}
-            rows={aggregates.monthlyBreakdown.map((m) => [m.label, m.jobs, number(m.points)])}
-          />
+        {/* Monthly breakdown - one table per technician */}
+        <div className="grid gap-4 md:grid-cols-2">
+          {aggregates.leaderboardWeek.map((t) => (
+            <div key={t.id}>
+              <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">{t.name} — Monthly breakdown</h2>
+              <Table
+                columns={['Month', 'Jobs', 'Points']}
+                rows={aggregates.monthlyBreakdown.map((m) => [
+                  m.label,
+                  m.techs[t.id]?.jobs ?? 0,
+                  number(m.techs[t.id]?.points ?? 0),
+                ])}
+              />
+            </div>
+          ))}
         </div>
       </div>
     );
