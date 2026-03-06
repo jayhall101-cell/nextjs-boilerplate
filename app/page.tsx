@@ -568,7 +568,7 @@ export default function Home() {
             <img
               src="/logo.png"
               alt="Astute Technology Solution"
-              className="h-9 w-auto object-contain"
+              className="h-28 w-auto object-contain"
               style={{ filter: "drop-shadow(0 0 8px rgba(255,120,0,0.25))" }}
             />
             <div className="text-xs text-zinc-500 dark:text-zinc-400">Proformans / points tracking</div>
