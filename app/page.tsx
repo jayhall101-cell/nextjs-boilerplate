@@ -497,6 +497,8 @@ export default function Home() {
   }
 
   function LogView() {
+    const [showAllJobs, setShowAllJobs] = useState(false);
+    const displayedJobs = showAllJobs ? jobs : jobs.slice(0, 30);
     return (
       <div className="space-y-4">
         <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
@@ -630,10 +632,18 @@ export default function Home() {
         </div>
 
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">
-            Most recent jobs
-            <span className="ml-3 text-xs font-normal text-red-500 dark:text-red-400">⚠ = client returned within 30 days (originating tech forfeits points)</span>
-          </h2>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-zinc-500 dark:text-zinc-400">
+              {showAllJobs ? `All jobs (${jobs.length})` : "Most recent jobs (30)"}
+              <span className="ml-3 text-xs font-normal text-red-500 dark:text-red-400">⚠ = client returned within 30 days (originating tech forfeits points)</span>
+            </h2>
+            <button
+              onClick={() => setShowAllJobs((v) => !v)}
+              className="rounded-lg border border-zinc-200 px-3 py-1 text-xs font-medium dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              {showAllJobs ? "Show recent only" : `All jobs (${jobs.length})`}
+            </button>
+          </div>
           <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-700">
             <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-700">
               <thead>
@@ -644,7 +654,7 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
-                {jobs.slice(0, 30).map((j, i) => {
+                {displayedJobs.map((j, i) => {
                   const isPenalized = !!j.id && penalized.has(j.id);
                   const effectivePts = isPenalized ? 0 : pointsFor(j);
                   return (
