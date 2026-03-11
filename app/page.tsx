@@ -434,6 +434,54 @@ export default function Home() {
             </div>
           ))}
         </div>
+
+        {/* Repeat clients table */}
+        {(() => {
+          const repeatRows = jobs
+            .filter((j) => j.id && penalized.has(j.id))
+            .sort((a, b) => b.job_date.localeCompare(a.job_date))
+            .map((j) => [
+              j.job_date,
+              techniciansById[j.technician_id]?.name ?? j.technician_id,
+              j.job_type.replace(/_/g, " "),
+              j.client_name ?? "—",
+              `-${pointsFor(j)}`,
+            ]);
+          return (
+            <div>
+              <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">
+                Repeat clients — points lost
+                <span className="ml-2 text-xs font-normal text-zinc-400">({repeatRows.length} penalized job{repeatRows.length !== 1 ? "s" : ""})</span>
+              </h2>
+              {repeatRows.length === 0 ? (
+                <p className="text-xs text-zinc-400 dark:text-zinc-500">No repeat clients detected this year.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-700">
+                  <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-700">
+                    <thead>
+                      <tr className="bg-zinc-50 dark:bg-zinc-950">
+                        {['Job Date', 'Technician', 'Job Type', 'Client', 'Points Lost'].map((c) => (
+                          <th key={c} className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
+                      {repeatRows.map((row, i) => (
+                        <tr key={i} className="bg-red-50 dark:bg-red-950/20">
+                          <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{row[0]}</td>
+                          <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{row[1]}</td>
+                          <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{row[2]}</td>
+                          <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{row[3]}</td>
+                          <td className="px-4 py-2 text-sm font-semibold text-red-500 dark:text-red-400">{row[4]}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
     );
   }
