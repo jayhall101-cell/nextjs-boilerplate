@@ -31,6 +31,7 @@ export type Job = {
   technician_name?: string;
   job_type: JobType;
   job_date: string; // YYYY-MM-DD
+  client_name?: string;
   notes?: string;
 };
 
@@ -157,7 +158,9 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
   const byMonth: Record<string, { year: number; month: number; techs: Record<string, { jobs: number; points: number }> }> = {};
 
   for (const job of jobs) {
-    const d = new Date(job.job_date);
+    // Parse date as local time to avoid UTC timezone shift
+    const [yr, mo, dy] = job.job_date.split("-").map(Number);
+    const d = new Date(yr, mo - 1, dy);
     const pts = pointsFor(job);
     const tech = job.technician_id;
 
@@ -290,7 +293,7 @@ export default function Home() {
         setError(null);
         const [techs, jobData] = await Promise.all([
           supabaseRestGet<Technician[]>("technicians", "select=*&order=name.asc"),
-          supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points&order=date.desc"),
+          supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points,client_name&order=date.desc"),
         ]);
         if (cancelled) return;
         setTechnicians(techs);
@@ -323,11 +326,12 @@ export default function Home() {
           date: r.job_date!,
           points: pointsFor({ job_type: r.job_type as JobType }),
           complaint_flag: false,
+          ...(r.client_name ? { client_name: r.client_name } : {}),
         }));
       if (!payload.length) throw new Error("Add at least one complete row");
 
       await supabaseRestInsert("jobs", payload);
-      const jobData = await supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points&order=date.desc");
+      const jobData = await supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points,client_name&order=date.desc");
       setJobs(jobData);
       setRowsToInsert([{ job_date: isoDateOnly(new Date()), job_type: "WIFI_INSTALL" }]);
       setView("Dashboard");
@@ -424,7 +428,7 @@ export default function Home() {
             <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-700">
               <thead>
                 <tr className="bg-zinc-50 dark:bg-zinc-950">
-                  {['Date', 'Technician', 'Job type', 'Notes'].map((h) => (
+                  {['Date', 'Technician', 'Job type', 'Client', 'Notes'].map((h) => (
                     <th key={h} className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                       {h}
                     </th>
@@ -490,6 +494,20 @@ export default function Home() {
                     </td>
                     <td className="px-4 py-2">
                       <input
+                        value={r.client_name ?? ""}
+                        onChange={(e) =>
+                          setRowsToInsert((rows) => {
+                            const copy = [...rows];
+                            copy[idx] = { ...copy[idx], client_name: e.target.value };
+                            return copy;
+                          })
+                        }
+                        placeholder="Client name"
+                        className="w-full rounded-lg border border-zinc-200 bg-white p-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <input
                         value={r.notes ?? ""}
                         onChange={(e) =>
                           setRowsToInsert((rows) => {
@@ -525,11 +543,12 @@ export default function Home() {
         <div>
           <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">Most recent jobs</h2>
           <Table
-            columns={['Date', 'Technician', 'Type', 'Points', 'Notes']}
+            columns={['Date', 'Technician', 'Type', 'Client', 'Points', 'Notes']}
             rows={jobs.slice(0, 15).map((j) => [
               j.job_date,
               techniciansById[j.technician_id]?.name ?? j.technician_id,
               j.job_type.replace("_", " "),
+              j.client_name ?? "",
               pointsFor(j),
               j.notes ?? "",
             ])}
