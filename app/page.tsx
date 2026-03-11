@@ -123,7 +123,47 @@ function pointsFor(job: Pick<Job, "job_type">) {
   return POINTS[job.job_type] ?? 0;
 }
 
-function computeAggregates(jobs: Job[], techniciansById: Record<string, Technician>) {
+/**
+ * Returns a Set of job IDs that are penalized due to a repeat client visit
+ * within 30 days of the original job (ANY technician).
+ *
+ * Rule: if client C appears again within 30 days of a previous job (regardless
+ * of which technician), the ORIGINAL job loses its points. The new technician
+ * keeps their points. This chains — a 3rd visit within 30 days of the 2nd
+ * also penalizes the 2nd job.
+ */
+function computePenalties(jobs: Job[]): Set<string> {
+  const penalized = new Set<string>();
+
+  // Sort ascending by date — group by client name only (cross-technician)
+  const sorted = [...jobs]
+    .filter((j) => j.id && j.client_name && j.client_name.trim() !== "")
+    .sort((a, b) => a.job_date.localeCompare(b.job_date));
+
+  // Group by client name only (case-insensitive) — technician doesn't matter
+  const groups: Record<string, Job[]> = {};
+  for (const job of sorted) {
+    const key = job.client_name!.trim().toLowerCase();
+    (groups[key] ??= []).push(job);
+  }
+
+  for (const jobList of Object.values(groups)) {
+    if (jobList.length < 2) continue;
+    for (let i = 1; i < jobList.length; i++) {
+      const repeat = jobList[i];
+      const original = jobList[i - 1];
+      const [ry, rm, rd] = repeat.job_date.split("-").map(Number);
+      const [oy, om, od] = original.job_date.split("-").map(Number);
+      const daysDiff = (new Date(ry, rm - 1, rd).getTime() - new Date(oy, om - 1, od).getTime()) / (1000 * 60 * 60 * 24);
+      if (daysDiff <= 30 && original.id) {
+        penalized.add(original.id);
+      }
+    }
+  }
+  return penalized;
+}
+
+function computeAggregates(jobs: Job[], techniciansById: Record<string, Technician>, penalized: Set<string>) {
   const now = new Date();
   const weekStart = startOfWeek(now);
   const weekEnd = endOfWeek(now);
@@ -161,7 +201,7 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
     // Parse date as local time to avoid UTC timezone shift
     const [yr, mo, dy] = job.job_date.split("-").map(Number);
     const d = new Date(yr, mo - 1, dy);
-    const pts = pointsFor(job);
+    const pts = job.id && penalized.has(job.id) ? 0 : pointsFor(job);
     const tech = job.technician_id;
 
     const bucket = (byTech[tech] ??= { total: 0, week: 0, month: 0, jobsAll: 0, jobsWeek: 0, jobsMonth: 0 });
@@ -283,7 +323,8 @@ export default function Home() {
     return map;
   }, [technicians]);
 
-  const aggregates = useMemo(() => computeAggregates(jobs, techniciansById), [jobs, techniciansById]);
+  const penalized = useMemo(() => computePenalties(jobs), [jobs]);
+  const aggregates = useMemo(() => computeAggregates(jobs, techniciansById, penalized), [jobs, techniciansById, penalized]);
 
   useEffect(() => {
     let cancelled = false;
@@ -541,18 +582,45 @@ export default function Home() {
         </div>
 
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">Most recent jobs</h2>
-          <Table
-            columns={['Date', 'Technician', 'Type', 'Client', 'Points', 'Notes']}
-            rows={jobs.slice(0, 15).map((j) => [
-              j.job_date,
-              techniciansById[j.technician_id]?.name ?? j.technician_id,
-              j.job_type.replace("_", " "),
-              j.client_name ?? "",
-              pointsFor(j),
-              j.notes ?? "",
-            ])}
-          />
+          <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">
+            Most recent jobs
+            <span className="ml-3 text-xs font-normal text-red-500 dark:text-red-400">⚠ = client returned within 30 days (originating tech forfeits points)</span>
+          </h2>
+          <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-700">
+            <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-700">
+              <thead>
+                <tr className="bg-zinc-50 dark:bg-zinc-950">
+                  {['Date', 'Technician', 'Type', 'Client', 'Points', 'Notes'].map((c) => (
+                    <th key={c} className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
+                {jobs.slice(0, 30).map((j, i) => {
+                  const isPenalized = !!j.id && penalized.has(j.id);
+                  const effectivePts = isPenalized ? 0 : pointsFor(j);
+                  return (
+                    <tr key={i} className={isPenalized ? "bg-red-50 dark:bg-red-950/20" : ""}>
+                      <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{j.job_date}</td>
+                      <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{techniciansById[j.technician_id]?.name ?? j.technician_id}</td>
+                      <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{j.job_type.replace("_", " ")}</td>
+                      <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{j.client_name ?? ""}</td>
+                      <td className="px-4 py-2 text-sm font-medium">
+                        {isPenalized ? (
+                          <span className="text-red-500 dark:text-red-400">
+                            ⚠ 0 <span className="line-through text-zinc-400 font-normal text-xs">{pointsFor(j)}</span>
+                          </span>
+                        ) : (
+                          <span className="text-zinc-900 dark:text-zinc-50">{effectivePts}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-zinc-900 dark:text-zinc-50">{j.notes ?? ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
