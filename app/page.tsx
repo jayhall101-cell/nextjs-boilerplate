@@ -310,6 +310,68 @@ function Table({ columns, rows }: { columns: string[]; rows: (string | number)[]
   );
 }
 
+// ── CSV Import helpers ────────────────────────────────────────────────────────
+
+const TECH_NAME_MAP: Record<string, number> = {
+  "mark collington": 1,
+  "odane dixon": 2,
+  "odane  dixon": 2, // double-space variant
+};
+
+function inferJobType(title: string): JobType {
+  const t = title.toLowerCase();
+  if (t.includes("fiber install") || t.includes("fiber installation")) return "FIBER_INSTALL";
+  if (t.includes("wifi install") || t.includes("wi-fi install") || t.includes("installation") || t.includes("relocation")) return "WIFI_INSTALL";
+  if (t.includes("fiber support")) return "FIBER_SUPPORT";
+  if (t.includes("support")) return "WIFI_SUPPORT";
+  if (t.includes("removal")) return "REMOVAL";
+  if (t.includes("outage")) return "OUTAGE";
+  return "WIFI_SUPPORT";
+}
+
+type CsvRow = {
+  technician_id: number;
+  technician_name: string;
+  date: string;
+  job_type: JobType;
+  points: number;
+  client_name: string;
+  error?: string;
+};
+
+function parseCsv(text: string): CsvRow[] {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  const idx = (name: string) => headers.indexOf(name);
+
+  return lines.slice(1).map((line) => {
+    // Handle quoted fields with commas inside
+    const cols: string[] = [];
+    let inQuote = false, cur = "";
+    for (const ch of line) {
+      if (ch === '"') { inQuote = !inQuote; }
+      else if (ch === "," && !inQuote) { cols.push(cur.trim()); cur = ""; }
+      else { cur += ch; }
+    }
+    cols.push(cur.trim());
+
+    const get = (name: string) => (cols[idx(name)] ?? "").replace(/^"|"$/g, "").trim();
+    const title = get("title");
+    const dateRaw = get("date").slice(0, 10);
+    const techRaw = get("assigned user");
+    const client = get("client");
+
+    const tech_id = TECH_NAME_MAP[techRaw.toLowerCase()];
+    if (!tech_id) return { technician_id: 0, technician_name: techRaw, date: dateRaw, job_type: "WIFI_SUPPORT" as JobType, points: 0, client_name: client, error: `Unknown technician: "${techRaw}"` };
+
+    const job_type = inferJobType(title);
+    return { technician_id: tech_id, technician_name: techRaw, date: dateRaw, job_type, points: POINTS[job_type], client_name: client };
+  }).filter((r) => r.date && r.date.match(/^\d{4}-\d{2}-\d{2}$/));
+}
+
+// ── End CSV Import helpers ─────────────────────────────────────────────────────
+
 export default function Home() {
   const [view, setView] = useState<View>("Dashboard");
   const [technicians, setTechnicians] = useState<Technician[]>([]);
@@ -499,8 +561,131 @@ export default function Home() {
   function LogView() {
     const [showAllJobs, setShowAllJobs] = useState(false);
     const displayedJobs = showAllJobs ? jobs : jobs.slice(0, 30);
+
+    // CSV import state
+    const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
+    const [csvFileName, setCsvFileName] = useState<string>("");
+    const [csvImporting, setCsvImporting] = useState(false);
+    const [csvResult, setCsvResult] = useState<string | null>(null);
+
+    function handleCsvFile(e: React.ChangeEvent<HTMLInputElement>) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setCsvFileName(file.name);
+      setCsvResult(null);
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target?.result as string;
+        const parsed = parseCsv(text);
+        setCsvRows(parsed);
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    }
+
+    async function handleCsvImport() {
+      const valid = csvRows.filter((r) => !r.error);
+      if (!valid.length) return;
+      setCsvImporting(true);
+      setCsvResult(null);
+      try {
+        // Check for duplicates against existing jobs
+        const existingKeys = new Set(
+          jobs.map((j) => `${j.technician_id}__${j.job_date}__${(j.client_name ?? "").toLowerCase()}`)
+        );
+        const toInsert = valid.filter(
+          (r) => !existingKeys.has(`${r.technician_id}__${r.date}__${r.client_name.toLowerCase()}`)
+        );
+        if (!toInsert.length) {
+          setCsvResult("⚠ All jobs in this file already exist in the database — nothing imported.");
+          return;
+        }
+        const payload = toInsert.map((r) => ({
+          technician_id: r.technician_id,
+          quarter_id: 1,
+          date: r.date,
+          job_type: r.job_type,
+          points: r.points,
+          complaint_flag: false,
+          quality_deduction: 0,
+          client_name: r.client_name || null,
+        }));
+        await supabaseRestInsert("jobs", payload);
+        const jobData = await supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points,client_name&order=date.desc");
+        setJobs(jobData);
+        setCsvResult(`✅ Imported ${toInsert.length} job${toInsert.length !== 1 ? "s" : ""}${valid.length - toInsert.length > 0 ? ` (${valid.length - toInsert.length} skipped as duplicates)` : ""}.`);
+        setCsvRows([]);
+        setCsvFileName("");
+      } catch (err: any) {
+        setCsvResult(`❌ Import failed: ${err?.message ?? "Unknown error"}`);
+      } finally {
+        setCsvImporting(false);
+      }
+    }
+
     return (
       <div className="space-y-4">
+
+        {/* ── CSV Import ── */}
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div>
+              <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Import CSV</div>
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">Upload an export file — jobs are parsed and previewed before import.</div>
+            </div>
+            <label className="cursor-pointer rounded-lg border border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800 px-4 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700">
+              {csvFileName ? `📄 ${csvFileName}` : "Choose CSV file"}
+              <input type="file" accept=".csv" className="hidden" onChange={handleCsvFile} />
+            </label>
+          </div>
+
+          {csvRows.length > 0 && (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Preview — {csvRows.filter(r => !r.error).length} valid / {csvRows.filter(r => r.error).length} errors
+                  {" · "}date range: {csvRows.filter(r=>!r.error).map(r=>r.date).sort()[0]} → {csvRows.filter(r=>!r.error).map(r=>r.date).sort().slice(-1)[0]}
+                </span>
+                <button
+                  onClick={handleCsvImport}
+                  disabled={csvImporting || csvRows.filter(r => !r.error).length === 0}
+                  className="rounded-lg bg-zinc-900 dark:bg-white px-4 py-1.5 text-xs font-semibold text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-50"
+                >
+                  {csvImporting ? "Importing…" : `Import ${csvRows.filter(r => !r.error).length} jobs`}
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+                <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-700 text-xs">
+                  <thead className="sticky top-0 bg-zinc-50 dark:bg-zinc-950">
+                    <tr>
+                      {["Date", "Technician", "Job Type", "Client", "Points", ""].map((h) => (
+                        <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
+                    {csvRows.map((r, i) => (
+                      <tr key={i} className={r.error ? "bg-red-50 dark:bg-red-950/30" : ""}>
+                        <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-50">{r.date}</td>
+                        <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-50">{r.technician_name}</td>
+                        <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-50">{r.error ? "—" : r.job_type.replace(/_/g, " ")}</td>
+                        <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-50">{r.client_name}</td>
+                        <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-50">{r.error ? "—" : r.points}</td>
+                        <td className="px-3 py-1.5 text-red-500">{r.error ?? ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {csvResult && (
+            <p className={`mt-3 text-sm font-medium ${csvResult.startsWith("✅") ? "text-green-600 dark:text-green-400" : csvResult.startsWith("⚠") ? "text-amber-500" : "text-red-500"}`}>
+              {csvResult}
+            </p>
+          )}
+        </div>
         <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
           <div className="flex items-center justify-between gap-4">
             <div>
