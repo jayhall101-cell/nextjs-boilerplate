@@ -195,7 +195,7 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
   };
 
   // Monthly breakdown per technician: byMonth[monthKey][techId]
-  const byMonth: Record<string, { year: number; month: number; techs: Record<string, { jobs: number; points: number }> }> = {};
+  const byMonth: Record<string, { year: number; month: number; techs: Record<string, { jobs: number; points: number; repeats: number }> }> = {};
 
   for (const job of jobs) {
     // Parse date as local time to avoid UTC timezone shift
@@ -233,10 +233,11 @@ function computeAggregates(jobs: Job[], techniciansById: Record<string, Technici
       byMonth[monthKey] = { year: d.getFullYear(), month: d.getMonth(), techs: {} };
     }
     if (!byMonth[monthKey].techs[tech]) {
-      byMonth[monthKey].techs[tech] = { jobs: 0, points: 0 };
+      byMonth[monthKey].techs[tech] = { jobs: 0, points: 0, repeats: 0 };
     }
     byMonth[monthKey].techs[tech].jobs += 1;
     byMonth[monthKey].techs[tech].points += pts;
+    if (job.id && penalized.has(job.id)) byMonth[monthKey].techs[tech].repeats += 1;
   }
 
   const leaderboardWeek = Object.entries(byTech)
@@ -486,11 +487,12 @@ export default function Home() {
             <div key={t.id}>
               <h2 className="mb-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">{t.name} — Monthly breakdown</h2>
               <Table
-                columns={['Month', 'Jobs', 'Points']}
+                columns={['Month', 'Jobs', 'Points', 'Repeats']}
                 rows={aggregates.monthlyBreakdown.map((m) => [
                   m.label,
                   m.techs[t.id]?.jobs ?? 0,
                   number(m.techs[t.id]?.points ?? 0),
+                  m.techs[t.id]?.repeats ?? 0,
                 ])}
               />
             </div>
