@@ -98,12 +98,15 @@ async function supabaseRestGet<T>(table: string, query: string) {
   return res.json() as Promise<T>;
 }
 
-async function supabaseRestInsert(table: string, payload: unknown) {
+async function supabaseRestInsert(table: string, payload: unknown, ignoreDuplicates = false) {
   const base = normalizeUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!base || !key) throw new Error("Supabase env vars missing");
 
   const url = `${base}/rest/v1/${table}`;
+  const prefer = ignoreDuplicates
+    ? "resolution=ignore-duplicates,return=representation"
+    : "return=representation";
   const res = await fetch(url, {
     method: "POST",
     cache: "no-store",
@@ -111,12 +114,13 @@ async function supabaseRestInsert(table: string, payload: unknown) {
       apikey: key,
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
-      Prefer: "return=representation",
+      Prefer: prefer,
     },
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(`Supabase insert failed: ${res.status}`);
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : [];
 }
 
 function pointsFor(job: Pick<Job, "job_type">) {
@@ -612,10 +616,12 @@ export default function Home() {
           quality_deduction: 0,
           client_name: r.client_name || null,
         }));
-        await supabaseRestInsert("jobs", payload);
+        const inserted = await supabaseRestInsert("jobs", payload, true);
+        const importedCount = Array.isArray(inserted) ? inserted.length : toInsert.length;
+        const skipped = valid.length - importedCount;
         const jobData = await supabaseRestGet<Job[]>("jobs", "select=id,technician_id,job_type,job_date:date,points,client_name&order=date.desc");
         setJobs(jobData);
-        setCsvResult(`✅ Imported ${toInsert.length} job${toInsert.length !== 1 ? "s" : ""}${valid.length - toInsert.length > 0 ? ` (${valid.length - toInsert.length} skipped as duplicates)` : ""}.`);
+        setCsvResult(`✅ Imported ${importedCount} job${importedCount !== 1 ? "s" : ""}${skipped > 0 ? ` (${skipped} skipped as duplicates)` : ""}.`);
         setCsvRows([]);
         setCsvFileName("");
       } catch (err: any) {
