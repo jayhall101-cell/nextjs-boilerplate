@@ -36,6 +36,12 @@ export type Job = {
 };
 
 type View = "Dashboard" | "Technicians" | "Log" | "Executive";
+type Role = "viewer" | "admin";
+
+const PINS: Record<string, Role> = {
+  "1212": "viewer",
+  "3325": "admin",
+};
 
 function normalizeUrl(base?: string) {
   if (!base) return undefined;
@@ -378,6 +384,9 @@ function parseCsv(text: string): CsvRow[] {
 // ── End CSV Import helpers ─────────────────────────────────────────────────────
 
 export default function Home() {
+  const [role, setRole] = useState<Role | null>(null);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState(false);
   const [view, setView] = useState<View>("Dashboard");
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -898,6 +907,55 @@ export default function Home() {
     );
   }
 
+  function handlePinSubmit() {
+    const matched = PINS[pinInput.trim()];
+    if (matched) {
+      setRole(matched);
+      setPinError(false);
+      setPinInput("");
+    } else {
+      setPinError(true);
+      setPinInput("");
+    }
+  }
+
+  if (!role) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-8 shadow-2xl">
+          <div className="flex flex-col items-center gap-6">
+            <img src="/logo.png" alt="Astute Technology Solution" className="h-24 w-auto object-contain" style={{ filter: "drop-shadow(0 0 10px rgba(255,120,0,0.3))" }} />
+            <div className="text-center">
+              <div className="text-lg font-semibold text-zinc-50">NETFLAIR</div>
+              <div className="text-xs text-zinc-500 mt-1">Proformans / points tracking</div>
+            </div>
+            <div className="w-full space-y-3">
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={6}
+                value={pinInput}
+                onChange={(e) => { setPinInput(e.target.value); setPinError(false); }}
+                onKeyDown={(e) => e.key === "Enter" && handlePinSubmit()}
+                placeholder="Enter PIN"
+                autoFocus
+                className={`w-full rounded-xl border px-4 py-3 text-center text-2xl tracking-widest bg-zinc-900 text-zinc-50 outline-none transition
+                  ${pinError ? "border-red-500 shake" : "border-zinc-700 focus:border-zinc-400"}`}
+              />
+              {pinError && <p className="text-center text-xs text-red-400">Incorrect PIN — try again</p>}
+              <button
+                onClick={handlePinSubmit}
+                className="w-full rounded-xl bg-white py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-100 transition"
+              >
+                Enter
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-black dark:text-zinc-50">
       <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -911,8 +969,8 @@ export default function Home() {
             />
             <div className="text-xs text-zinc-500 dark:text-zinc-400">Proformans / points tracking</div>
           </div>
-          <nav className="flex flex-wrap gap-2">
-            {(['Dashboard', 'Technicians', 'Log', 'Executive'] as View[]).map((v) => (
+          <nav className="flex flex-wrap gap-2 items-center">
+            {(['Dashboard', 'Technicians', ...(role === 'admin' ? ['Log'] : []), 'Executive'] as View[]).map((v) => (
               <button
                 key={v}
                 onClick={() => setView(v)}
@@ -921,6 +979,12 @@ export default function Home() {
                 {v}
               </button>
             ))}
+            <button
+              onClick={() => { setRole(null); setView("Dashboard"); }}
+              className="ml-2 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
+            >
+              Lock
+            </button>
           </nav>
         </div>
       </header>
